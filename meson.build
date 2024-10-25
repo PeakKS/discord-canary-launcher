@@ -7,6 +7,7 @@ project(
 
 curl_dep = dependency('libcurl')
 json_dep = dependency('json-c')
+archive_dep = dependency('libarchive')
 
 executable(
   'discord-canary-launcher',
@@ -14,6 +15,7 @@ executable(
   dependencies: [
     curl_dep,
     json_dep,
+    archive_dep,
   ],
   install : true
 )
