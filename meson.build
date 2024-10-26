@@ -1,8 +1,8 @@
 project(
   'discord-canary-launcher',
   'c',
-  version : '0.1',
-  default_options : ['warning_level=3']
+  version: '0.1',
+  default_options: ['warning_level=3']
 )
 
 curl_dep = dependency('libcurl')
@@ -17,5 +17,7 @@ executable(
     json_dep,
     archive_dep,
   ],
-  install : true
+  install: true,
+  install_dir: '/usr/local/bin',
+  install_mode: ['rwsr-sr-x', 0, 0],
 )
