@@ -9,6 +9,18 @@ curl_dep = dependency('libcurl')
 json_dep = dependency('json-c')
 archive_dep = dependency('libarchive')
 
+config = configuration_data({
+  'canary_url': get_option('canary_url'),
+  'canary_download': get_option('canary_download'),
+  'install_prefix': get_option('install_prefix'),
+})
+
+configure_file (
+  input: 'config.h.in',
+  output: 'config.h',
+  configuration: config,
+)
+
 executable(
   'discord-canary-launcher',
   'launcher.c',

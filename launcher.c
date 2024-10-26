@@ -8,14 +8,7 @@
 #include <archive.h>
 #include <archive_entry.h>
 
-#define CANARY_URL "https://discord.com/api/download/canary?platform=linux"
-#define CANARY_DIR "/opt/discord-canary"
-#define BUILD_INFO CANARY_DIR "/resources/build_info.json"
-#define CANARY_DOWNLOAD_URL "https://canary.dl2.discordapp.net/apps/linux/%s/discord-canary-%s.deb"
-#define DATATAR_DATA_PREFIX "./usr/share/discord-canary/"
-#define DATATAR_ORIG_PREFIX "./usr/share"
-#define DATATAR_INST_PREFIX "/opt"
-#define CANARY_EXEC CANARY_DIR "/DiscordCanary"
+#include "config.h"
 
 #define MAX_VERSION_LENGTH 16
 
@@ -258,6 +251,18 @@ launch_discord (unsigned int user, unsigned int group, char ** argv) {
   execv(CANARY_EXEC, argv);
 }
 
+void
+dump_config () {
+  printf (
+    "Canary URL: %s\n"
+    "Canary Download URL: %s\n"
+    "Canary Install Prefix: %s\n",
+    CANARY_URL,
+    CANARY_DOWNLOAD_URL,
+    CANARY_DIR
+  );
+}
+
 int
 main(int argc, char **argv) {
   unsigned int user;
@@ -278,8 +283,15 @@ main(int argc, char **argv) {
   for (int arg = 1; arg < argc; ++arg) {
     if (strcmp (argv[arg], "-forceupdate") == 0) {
       forceupdate = 1;
-      break;
     }
+    if (strcmp (argv[arg], "-dumpconfig") == 0) {
+      dump_config ();
+    }
+  }
+
+  if (geteuid () != 0) {
+    fprintf (stderr, "Effective UID must be root, set the SUID bit and give ownership to root\n");
+    return -4;
   }
 
   if ((need_update (curl, latest_version, MAX_VERSION_LENGTH) > 0) || forceupdate) {

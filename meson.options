@@ -1,0 +1,3 @@
+option('canary_url', type: 'string', value: 'https://discord.com/api/download/canary?platform=linux', description: 'URL that redirects to discord canary deb package download')
+option('canary_download', type: 'string', value: 'https://canary.dl2.discordapp.net/apps/linux/%s/discord-canary-%s.deb', description: 'Actual deb package download URL (takes two string parameters for version)')
+option('install_prefix', type: 'string', value: '/opt', description: 'Location where Discord Canary is installed ("discord-canary" directory)')

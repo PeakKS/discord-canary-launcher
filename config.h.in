@@ -1,0 +1,15 @@
+#ifndef _CONFIG_H
+#define _CONFIG_H
+
+#define CANARY_URL "@canary_url@"
+#define CANARY_DOWNLOAD_URL "@canary_download@"
+
+#define DATATAR_DATA_PREFIX "./usr/share/discord-canary/"
+#define DATATAR_ORIG_PREFIX "./usr/share"
+#define DATATAR_INST_PREFIX "@install_prefix@"
+
+#define CANARY_DIR "@install_prefix@/discord-canary"
+#define BUILD_INFO "@install_prefix@/discord-canary/resources/build_info.json"
+#define CANARY_EXEC "@install_prefix@/discord-canary/DiscordCanary"
+
+#endif /* _CONFIG_H */
