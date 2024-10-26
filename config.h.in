@@ -12,4 +12,6 @@
 #define BUILD_INFO "@install_prefix@/discord-canary/resources/build_info.json"
 #define CANARY_EXEC "@install_prefix@/discord-canary/DiscordCanary"
 
+#define VERSION_MAX_LENGTH 16
+
 #endif /* _CONFIG_H */

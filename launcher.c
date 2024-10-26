@@ -10,8 +10,6 @@
 
 #include "config.h"
 
-#define MAX_VERSION_LENGTH 16
-
 int
 get_local_version (char *version_string, size_t version_string_length) {
   json_object *root = json_object_from_file (BUILD_INFO);
@@ -61,8 +59,8 @@ get_remote_version (CURL *curl, char *version_string, size_t version_string_leng
 
 int
 need_update (CURL *curl, char *version, size_t version_length) {
-  char local_version[MAX_VERSION_LENGTH];
-  char remote_version[MAX_VERSION_LENGTH];
+  char local_version[VERSION_MAX_LENGTH];
+  char remote_version[VERSION_MAX_LENGTH];
   int rc;
 
   rc = get_local_version (local_version, sizeof(local_version));
@@ -110,7 +108,7 @@ int
 download(CURL *curl, const char *version, struct curl_download_memory *download) {
   printf("Downloading...\n");
   CURLcode res;
-  char download_url[sizeof(CANARY_DOWNLOAD_URL) + (2 * MAX_VERSION_LENGTH)];
+  char download_url[sizeof(CANARY_DOWNLOAD_URL) + (2 * VERSION_MAX_LENGTH)];
 
   snprintf(download_url, sizeof(download_url), CANARY_DOWNLOAD_URL, version, version);
   curl_easy_setopt (curl, CURLOPT_URL, download_url);
@@ -269,7 +267,7 @@ main(int argc, char **argv) {
   unsigned int group;
   int forceupdate = 0;
   CURL *curl;
-  char latest_version[MAX_VERSION_LENGTH];
+  char latest_version[VERSION_MAX_LENGTH];
   struct curl_download_memory debpkg;
   debpkg.memory = malloc(1);
   debpkg.size = 0;
@@ -294,7 +292,7 @@ main(int argc, char **argv) {
     return -4;
   }
 
-  if ((need_update (curl, latest_version, MAX_VERSION_LENGTH) > 0) || forceupdate) {
+  if ((need_update (curl, latest_version, VERSION_MAX_LENGTH) > 0) || forceupdate) {
     printf("Need update!\n");
   } else {
     printf("Up to date!\n");
