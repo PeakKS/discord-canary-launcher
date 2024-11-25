@@ -10,6 +10,48 @@
 
 #include "config.h"
 
+FILE *zenity;
+
+void
+gui_open () {
+  zenity = popen (
+    "zenity"
+    " --title 'Discord Canary Launcher'"
+    " --text 'Checking for update...'"
+    " --progress"
+    " --no-cancel"
+    " --auto-close",
+    "w"
+  );
+  if (zenity)
+    setvbuf (zenity, NULL, _IONBF, 0);
+}
+
+void
+gui_close () {
+  if (!zenity)
+    return;
+
+  fprintf(zenity, "100\n");
+  pclose(zenity);
+}
+
+void
+gui_set_text (const char *text) {
+  if (!zenity)
+    return;
+
+  fprintf(zenity, "# %s\n", text);
+}
+
+void
+gui_set_progress (float progress) {
+  if (!zenity)
+    return;
+
+  fprintf(zenity, "%f\n", progress * 99);
+}
+
 int
 get_local_version (char *version_string, size_t version_string_length) {
   json_object *root = json_object_from_file (BUILD_INFO);
@@ -104,14 +146,37 @@ curl_download_memory_callback (void *contents, size_t size, size_t nmemb, void *
   return realsize;
 }
 
+struct transfer_progress {
+  double last_update;
+};
+
+static size_t
+curl_transfer_callback (void *userp, curl_off_t dltotal, curl_off_t dlnow, 
+__attribute__((__unused__)) curl_off_t ultotal, __attribute__((__unused__)) curl_off_t ulnow) {
+  struct transfer_progress *progress = userp;
+  double ratio = (double)dlnow / (double)dltotal;
+  if ((ratio - progress->last_update) > 0.1) {
+    printf ("Download progress: (%.1f%%)\n", ratio * 100);
+    progress->last_update = ratio;
+  }
+  gui_set_progress (ratio);
+  return 0;
+}
+
 int
 download(CURL *curl, const char *version, struct curl_download_memory *download) {
   printf("Downloading...\n");
   CURLcode res;
+  struct transfer_progress progress;
   char download_url[sizeof(CANARY_DOWNLOAD_URL) + (2 * VERSION_MAX_LENGTH)];
+
+  progress.last_update = 0.0;
 
   snprintf(download_url, sizeof(download_url), CANARY_DOWNLOAD_URL, version, version);
   curl_easy_setopt (curl, CURLOPT_URL, download_url);
+  curl_easy_setopt (curl, CURLOPT_NOPROGRESS, 0L);
+  curl_easy_setopt (curl, CURLOPT_XFERINFOFUNCTION, curl_transfer_callback);
+  curl_easy_setopt (curl, CURLOPT_XFERINFODATA, &progress);
   curl_easy_setopt (curl, CURLOPT_WRITEFUNCTION, curl_download_memory_callback);
   curl_easy_setopt (curl, CURLOPT_WRITEDATA, (void *)download);
 
@@ -274,6 +339,7 @@ main(int argc, char **argv) {
 
   user = getuid();
   group = getgid();
+
   curl = curl_easy_init();
   if (!curl)
     return -1;
@@ -292,6 +358,8 @@ main(int argc, char **argv) {
     return -4;
   }
 
+  gui_open();
+
   if ((need_update (curl, latest_version, VERSION_MAX_LENGTH) > 0) || forceupdate) {
     printf("Need update!\n");
   } else {
@@ -299,17 +367,23 @@ main(int argc, char **argv) {
     goto finish;
   }
 
-  if (download (curl, latest_version, &debpkg) < 0)
+  gui_set_text ("Downloading update...");
+  if (download (curl, latest_version, &debpkg) < 0) {
+    gui_close();
     return -2;
+  }
 
-  if (extract (&debpkg) < 0)
+  gui_set_text ("Unpacking update...");
+  if (extract (&debpkg) < 0) {
+    gui_close();
     return -3;
-
+  }
 finish:
   free (debpkg.memory);
   debpkg.memory = NULL;
   debpkg.size = 0;
 
+  gui_close();
   curl_easy_cleanup (curl);
   launch_discord (user, group, argv);
   return 0;
