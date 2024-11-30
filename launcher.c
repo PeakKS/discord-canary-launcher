@@ -7,50 +7,9 @@
 #include <json-c/json.h>
 #include <archive.h>
 #include <archive_entry.h>
+#include <adwaita.h>
 
 #include "config.h"
-
-FILE *zenity;
-
-void
-gui_open () {
-  zenity = popen (
-    "zenity"
-    " --title 'Discord Canary Launcher'"
-    " --text 'Checking for update...'"
-    " --progress"
-    " --no-cancel"
-    " --auto-close",
-    "w"
-  );
-  if (zenity)
-    setvbuf (zenity, NULL, _IONBF, 0);
-}
-
-void
-gui_close () {
-  if (!zenity)
-    return;
-
-  fprintf(zenity, "100\n");
-  pclose(zenity);
-}
-
-void
-gui_set_text (const char *text) {
-  if (!zenity)
-    return;
-
-  fprintf(zenity, "# %s\n", text);
-}
-
-void
-gui_set_progress (float progress) {
-  if (!zenity)
-    return;
-
-  fprintf(zenity, "%f\n", progress * 99);
-}
 
 int
 get_local_version (char *version_string, size_t version_string_length) {
@@ -147,29 +106,34 @@ curl_download_memory_callback (void *contents, size_t size, size_t nmemb, void *
 }
 
 struct transfer_progress {
+  GtkWidget *bar;
   double last_update;
 };
 
 static size_t
 curl_transfer_callback (void *userp, curl_off_t dltotal, curl_off_t dlnow, 
-__attribute__((__unused__)) curl_off_t ultotal, __attribute__((__unused__)) curl_off_t ulnow) {
+G_GNUC_UNUSED curl_off_t ultotal, G_GNUC_UNUSED curl_off_t ulnow) {
   struct transfer_progress *progress = userp;
   double ratio = (double)dlnow / (double)dltotal;
   if ((ratio - progress->last_update) > 0.1) {
     printf ("Download progress: (%.1f%%)\n", ratio * 100);
     progress->last_update = ratio;
   }
-  gui_set_progress (ratio);
+  if (ratio > 0.0 && ratio < 100.0) {
+    gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (progress->bar), ratio);
+    g_main_context_iteration (NULL, FALSE);
+  }
   return 0;
 }
 
 int
-download(CURL *curl, const char *version, struct curl_download_memory *download) {
+download (CURL *curl, const char *version, struct curl_download_memory *download, GtkWidget *progressbar) {
   printf("Downloading...\n");
   CURLcode res;
   struct transfer_progress progress;
   char download_url[sizeof(CANARY_DOWNLOAD_URL) + (2 * VERSION_MAX_LENGTH)];
 
+  progress.bar = progressbar;
   progress.last_update = 0.0;
 
   snprintf(download_url, sizeof(download_url), CANARY_DOWNLOAD_URL, version, version);
@@ -250,7 +214,9 @@ extract (struct curl_download_memory *debpkg) {
   char newpath[PATH_MAX];
   void *data = NULL;
   size_t data_capacity = 0;
-  while (archive_read_next_header (a, &entry) == ARCHIVE_OK) {
+  int rc;
+
+  while ((rc = archive_read_next_header (a, &entry)) == ARCHIVE_OK) {
     const char *pathname;
     size_t data_size;
     
@@ -264,14 +230,12 @@ extract (struct curl_download_memory *debpkg) {
 
     snprintf (newpath, PATH_MAX, "%s%s", DATATAR_INST_PREFIX, &pathname[strip_length]);
     archive_entry_set_pathname (entry, newpath);
-    archive_entry_set_uid (entry, 0);
-    archive_entry_set_gid (entry, 0);
 
     if (data_size > data_capacity) {
       char *ptr = realloc (data, data_size);
       if (!ptr) {
-        fprintf (stderr, "realloc: Out of memory!\n");
-        return -6;
+        perror ("Failed to extract archive entry, out of memory");
+        exit (1);
       }
       data = ptr;
     }
@@ -279,112 +243,143 @@ extract (struct curl_download_memory *debpkg) {
     read_bytes = archive_read_data (a, data, data_size);
     if (read_bytes != data_size) {
       fprintf (stderr, "Extraction size mismatch %ld:%ld", read_bytes, data_size);
-      return -6;
+      exit (1);
     }
 
     int hwrite = archive_write_header (writer, entry);
     if (hwrite != ARCHIVE_OK) {
       fprintf (stderr, "Archive header write error: %s\n", archive_error_string (writer));
+      exit (1);
     }
-    archive_write_data (writer, data, data_size);
+    if (archive_write_data (writer, data, data_size) < (la_ssize_t) data_size) {
+      fprintf (stderr, "Failure while writing file %s: %s\n", newpath, archive_error_string (writer));
+    }
+  }
+
+  if (rc != ARCHIVE_EOF) {
+    fprintf (stderr, "Failure while reading archive: %s\n", archive_error_string (writer));
+    exit (1);
   }
 
   free (data);
 
   if (archive_read_free (a) != ARCHIVE_OK) {
     fprintf (stderr, "Failed to free debpkg archive\n");
-    return -7;
+    exit (1);
   }
 
   free (datatar);
 
+  if (archive_write_close (writer) != ARCHIVE_OK) {
+    fprintf (stderr, "Failed to close writer: %s\n", archive_error_string (writer));
+    exit (1);
+  }
+
   if (archive_write_free (writer) != ARCHIVE_OK) {
     fprintf (stderr, "Failed to free archive writer\n");
-    return -8;
+    exit (1);
   }
   
   return 0;
 }
 
 void
-launch_discord (unsigned int user, unsigned int group, char ** argv) {
-  setuid (user);
-  setgid (group);
+launch_discord (char ** argv) {
   chdir (CANARY_DIR);
-  execv(CANARY_EXEC, argv);
+  execv (CANARY_EXEC, argv);
 }
 
 void
-dump_config () {
-  printf (
-    "Canary URL: %s\n"
-    "Canary Download URL: %s\n"
-    "Canary Install Prefix: %s\n",
-    CANARY_URL,
-    CANARY_DOWNLOAD_URL,
-    CANARY_DIR
-  );
+cancel (G_GNUC_UNUSED GtkButton *button, G_GNUC_UNUSED gpointer user_data) {
+  exit (1);
 }
 
 int
 main(int argc, char **argv) {
-  unsigned int user;
-  unsigned int group;
-  int forceupdate = 0;
+  g_autoptr (GOptionContext) optctx = NULL;
+  GtkWidget *window;
+  GtkWidget *dialog;
+  GtkWidget *progressbar;
+  GError *error = NULL;
+  gboolean forceupdate = FALSE;
+  gboolean dumpconfig = FALSE;
   CURL *curl;
   char latest_version[VERSION_MAX_LENGTH];
   struct curl_download_memory debpkg;
   debpkg.memory = malloc(1);
   debpkg.size = 0;
 
-  user = getuid();
-  group = getgid();
+  GOptionEntry entries[] = {
+    { "forceupdate", 'f', G_OPTION_FLAG_NONE, G_OPTION_ARG_NONE, &forceupdate, "Force an update", NULL },
+    { "dumpconfig", 'd', G_OPTION_FLAG_NONE, G_OPTION_ARG_NONE, &dumpconfig, "Dump compiled-in config", NULL },
+    G_OPTION_ENTRY_NULL
+  };
+
+  optctx = g_option_context_new (" -- an automatic updater for Discord Canary");
+  g_option_context_add_main_entries (optctx, entries, NULL);
+  g_option_context_parse (optctx, &argc, &argv, &error);
+
+  if (dumpconfig) {
+    puts (
+      "Compiled Configuration:\n"
+      "\tCanary URL: " CANARY_URL "\n"
+      "\tCanary Download URL: " CANARY_DOWNLOAD_URL "\n"
+      "\tCanary Install Prefix: " CANARY_DIR "\n"
+    );
+  }
+
+  adw_init ();
+
+  window = adw_window_new ();
+  gtk_window_set_title (GTK_WINDOW (window), "Discord Canary Updater");
+  gtk_window_set_default_size (GTK_WINDOW (window), 300, 100);
+
+  dialog = adw_message_dialog_new (GTK_WINDOW (window), "Discord Canary Updater", "Checking for update...");
+  adw_message_dialog_add_response (ADW_MESSAGE_DIALOG (dialog), "cancel", "Cancel");
+  g_signal_connect (dialog, "response", G_CALLBACK (cancel), NULL);
+
+  if (access (BUILD_INFO, W_OK) < 0) {
+    perror ("You do not have permission to update Discord's files");
+
+    adw_message_dialog_set_body (ADW_MESSAGE_DIALOG (dialog), "You do not have permission to update Discord's files");
+    gtk_window_present (GTK_WINDOW (dialog));
+    while (g_main_context_iteration (NULL, TRUE));
+
+    exit (1);
+  }
+
+  progressbar = gtk_progress_bar_new ();
+  adw_message_dialog_set_extra_child (ADW_MESSAGE_DIALOG (dialog), progressbar);
+
+  gtk_window_present (GTK_WINDOW (dialog));
+  g_main_context_iteration (NULL, TRUE);
 
   curl = curl_easy_init();
   if (!curl)
-    return -1;
-
-  for (int arg = 1; arg < argc; ++arg) {
-    if (strcmp (argv[arg], "-forceupdate") == 0) {
-      forceupdate = 1;
-    }
-    if (strcmp (argv[arg], "-dumpconfig") == 0) {
-      dump_config ();
-    }
-  }
-
-  if (geteuid () != 0) {
-    fprintf (stderr, "Effective UID must be root, set the SUID bit and give ownership to root\n");
-    return -4;
-  }
-
-  gui_open();
+    exit (1);
 
   if ((need_update (curl, latest_version, VERSION_MAX_LENGTH) > 0) || forceupdate) {
     printf("Need update!\n");
+
+    adw_message_dialog_set_body (ADW_MESSAGE_DIALOG (dialog), "Downloading update...");
+    g_main_context_iteration (NULL, TRUE);
+    if (download (curl, latest_version, &debpkg, progressbar) < 0)
+      exit (1);
+
+    adw_message_dialog_set_body (ADW_MESSAGE_DIALOG (dialog), "Extracting...");
+    g_main_context_iteration (NULL, TRUE);
+    if (extract (&debpkg) < 0)
+      exit (1);
+      
   } else {
     printf("Up to date!\n");
-    goto finish;
   }
 
-  gui_set_text ("Downloading update...");
-  if (download (curl, latest_version, &debpkg) < 0) {
-    gui_close();
-    return -2;
-  }
-
-  gui_set_text ("Unpacking update...");
-  if (extract (&debpkg) < 0) {
-    gui_close();
-    return -3;
-  }
-finish:
   free (debpkg.memory);
   debpkg.memory = NULL;
   debpkg.size = 0;
-
-  gui_close();
   curl_easy_cleanup (curl);
-  launch_discord (user, group, argv);
+
+  launch_discord (argv);
   return 0;
 }
