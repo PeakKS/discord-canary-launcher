@@ -7,50 +7,13 @@
 #include <json-c/json.h>
 #include <archive.h>
 #include <archive_entry.h>
+#include <adwaita.h>
 
 #include "config.h"
 
-FILE *zenity;
-
-void
-gui_open () {
-  zenity = popen (
-    "zenity"
-    " --title 'Discord Canary Launcher'"
-    " --text 'Checking for update...'"
-    " --progress"
-    " --no-cancel"
-    " --auto-close",
-    "w"
-  );
-  if (zenity)
-    setvbuf (zenity, NULL, _IONBF, 0);
-}
-
-void
-gui_close () {
-  if (!zenity)
-    return;
-
-  fprintf(zenity, "100\n");
-  pclose(zenity);
-}
-
-void
-gui_set_text (const char *text) {
-  if (!zenity)
-    return;
-
-  fprintf(zenity, "# %s\n", text);
-}
-
-void
-gui_set_progress (float progress) {
-  if (!zenity)
-    return;
-
-  fprintf(zenity, "%f\n", progress * 99);
-}
+struct options {
+  bool forceupdate;
+};
 
 int
 get_local_version (char *version_string, size_t version_string_length) {
@@ -147,29 +110,31 @@ curl_download_memory_callback (void *contents, size_t size, size_t nmemb, void *
 }
 
 struct transfer_progress {
+  GtkWidget *bar;
   double last_update;
 };
 
 static size_t
 curl_transfer_callback (void *userp, curl_off_t dltotal, curl_off_t dlnow, 
-__attribute__((__unused__)) curl_off_t ultotal, __attribute__((__unused__)) curl_off_t ulnow) {
+G_GNUC_UNUSED curl_off_t ultotal, G_GNUC_UNUSED curl_off_t ulnow) {
   struct transfer_progress *progress = userp;
   double ratio = (double)dlnow / (double)dltotal;
   if ((ratio - progress->last_update) > 0.1) {
     printf ("Download progress: (%.1f%%)\n", ratio * 100);
     progress->last_update = ratio;
   }
-  gui_set_progress (ratio);
+  gtk_progress_bar_set_fraction (GTK_PROGRESS_BAR (progress->bar), ratio);
   return 0;
 }
 
 int
-download(CURL *curl, const char *version, struct curl_download_memory *download) {
+download (CURL *curl, const char *version, struct curl_download_memory *download, GtkWidget *progressbar) {
   printf("Downloading...\n");
   CURLcode res;
   struct transfer_progress progress;
   char download_url[sizeof(CANARY_DOWNLOAD_URL) + (2 * VERSION_MAX_LENGTH)];
 
+  progress.bar = progressbar;
   progress.last_update = 0.0;
 
   snprintf(download_url, sizeof(download_url), CANARY_DOWNLOAD_URL, version, version);
@@ -314,77 +279,115 @@ launch_discord (unsigned int user, unsigned int group, char ** argv) {
   execv(CANARY_EXEC, argv);
 }
 
-void
-dump_config () {
-  printf (
-    "Canary URL: %s\n"
-    "Canary Download URL: %s\n"
-    "Canary Install Prefix: %s\n",
-    CANARY_URL,
-    CANARY_DOWNLOAD_URL,
-    CANARY_DIR
-  );
-}
-
-int
-main(int argc, char **argv) {
-  unsigned int user;
-  unsigned int group;
-  int forceupdate = 0;
+static void
+activate (GtkApplication *app, gpointer user_data) {
+  GtkWidget *window;
+  GtkWidget *box;
+  GtkWidget *progress;
   CURL *curl;
   char latest_version[VERSION_MAX_LENGTH];
   struct curl_download_memory debpkg;
   debpkg.memory = malloc(1);
   debpkg.size = 0;
 
-  user = getuid();
-  group = getgid();
+  struct options *app_options = user_data;
+
+  window = gtk_application_window_new (app);
+  gtk_window_set_title (GTK_WINDOW (window), "Discord Canary Launcher");
+  gtk_window_set_default_size (GTK_WINDOW (window), 200, 100);
+
+  box = gtk_box_new (GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_set_halign (box, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign (box, GTK_ALIGN_CENTER);
+  gtk_window_set_child (GTK_WINDOW (window), box);
+
+  progress = gtk_progress_bar_new ();
+  gtk_progress_bar_get_show_text (GTK_PROGRESS_BAR (progress));
+  gtk_progress_bar_set_text (GTK_PROGRESS_BAR (progress), "Checking for update...");
+  gtk_box_append (GTK_BOX (box), progress);
+
+  gtk_window_present (GTK_WINDOW (window));
 
   curl = curl_easy_init();
   if (!curl)
-    return -1;
+    return;
 
-  for (int arg = 1; arg < argc; ++arg) {
-    if (strcmp (argv[arg], "-forceupdate") == 0) {
-      forceupdate = 1;
-    }
-    if (strcmp (argv[arg], "-dumpconfig") == 0) {
-      dump_config ();
-    }
-  }
-
-  if (geteuid () != 0) {
-    fprintf (stderr, "Effective UID must be root, set the SUID bit and give ownership to root\n");
-    return -4;
-  }
-
-  gui_open();
-
-  if ((need_update (curl, latest_version, VERSION_MAX_LENGTH) > 0) || forceupdate) {
+  if ((need_update (curl, latest_version, VERSION_MAX_LENGTH) > 0) || app_options->forceupdate) {
     printf("Need update!\n");
   } else {
     printf("Up to date!\n");
     goto finish;
   }
 
-  gui_set_text ("Downloading update...");
-  if (download (curl, latest_version, &debpkg) < 0) {
-    gui_close();
-    return -2;
+  gtk_progress_bar_set_text (GTK_PROGRESS_BAR (progress), "Downloading update...");
+  if (download (curl, latest_version, &debpkg, progress) < 0) {
+    return;
   }
 
-  gui_set_text ("Unpacking update...");
+  gtk_progress_bar_set_text (GTK_PROGRESS_BAR (progress), "Extracting...");
   if (extract (&debpkg) < 0) {
-    gui_close();
-    return -3;
+    return;
   }
 finish:
   free (debpkg.memory);
   debpkg.memory = NULL;
   debpkg.size = 0;
-
-  gui_close();
   curl_easy_cleanup (curl);
-  launch_discord (user, group, argv);
-  return 0;
+}
+
+static gint
+handle_local_options (G_GNUC_UNUSED GApplication *application,
+                      GVariantDict *options,
+                      gpointer user_data) {
+  struct options *app_options = user_data;
+  gboolean dump;
+
+  if (g_variant_dict_lookup (options, "forceupdate", "b", &app_options->forceupdate))
+    printf ("Forcing update: %d\n", app_options->forceupdate);
+  if (g_variant_dict_lookup (options, "dumpconfig", "b", &dump)) {
+    puts (
+      "Compiled Configuration:\n"
+      "\tCanary URL: " CANARY_URL "\n"
+      "\tCanary Download URL: " CANARY_DOWNLOAD_URL "\n"
+      "\tCanary Install Prefix: " CANARY_DIR "\n"
+    );
+  }
+  return -1;
+}
+
+int
+main(int argc, char **argv) {
+  unsigned int uid;
+  unsigned int gid;
+  g_autoptr (AdwApplication) app = NULL;
+  int status;
+  struct options app_options = {
+    .forceupdate = false,
+  };
+
+  uid = getuid();
+  gid = getgid();
+  /*
+  if (geteuid () != 0) {
+    fprintf (stderr, "Effective UID must be root, set the SUID bit and give ownership to root\n");
+    exit(1);
+  }
+  */
+
+  GOptionEntry entries[] = {
+    { "forceupdate", 'f', G_OPTION_FLAG_NONE, G_OPTION_ARG_NONE, NULL, "Force an update", NULL },
+    { "dumpconfig", 'd', G_OPTION_FLAG_NONE, G_OPTION_ARG_NONE, NULL, "Dump compiled-in config", NULL },
+    G_OPTION_ENTRY_NULL
+  };
+
+  app = adw_application_new ("com.discordapp.launcher", G_APPLICATION_DEFAULT_FLAGS);
+  g_signal_connect (app, "activate", G_CALLBACK (activate), &app_options);
+
+  g_application_add_main_option_entries (G_APPLICATION(app), entries);
+  g_signal_connect (app, "handle-local-options", G_CALLBACK (handle_local_options), &app_options);
+
+  status = g_application_run (G_APPLICATION (app), argc, argv);
+
+  //launch_discord (uid, gid, argv);
+  return status;
 }
